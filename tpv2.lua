@@ -4,8 +4,9 @@ local RunService = game:GetService("RunService")
 -- Variables
 local currentFollowedPart = nil
 local followConnection = nil
+local autoSkillConnection = nil
+local isAutoSkillEnabled = false
 local targetIndices = {6, 7, 8, 9, 10, 11, 12, 13}
-local currentTargetIndex = 1
 local targetParts = {}
 
 -- Functions
@@ -31,14 +32,14 @@ local function startFollowing()
         return
     end
     
-    -- Follow the first available part
     currentFollowedPart = targetParts[1]
     
     followConnection = RunService.RenderStepped:Connect(function()
         local player = Players.LocalPlayer
-        if player and player.Character then
-            local pos = currentFollowedPart.CFrame * CFrame.new(0, currentFollowedPart.Size.Y/2 + 2, 0)
-            player.Character:MoveTo(pos.Position)
+        if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = player.Character.HumanoidRootPart
+            local offset = CFrame.new(0, currentFollowedPart.Size.Y/2 + 2, 0)
+            hrp.CFrame = currentFollowedPart.CFrame * offset
         end
     end)
     
@@ -54,30 +55,151 @@ local function stopFollowing()
     print("Stopped following")
 end
 
--- Check if followed part still exists every second
+local function getTargetPart()
+    local camera = workspace:FindFirstChild("Camera")
+    if not camera then return nil end
+    local part = camera:FindFirstChild("Part")
+    if part and part:IsA("BasePart") then return part end
+    return nil
+end
+
+local function teleportToPart()
+    local targetPart = getTargetPart()
+    if not targetPart then
+        print("Part not found in Camera or not a BasePart")
+        return
+    end
+    
+    local player = Players.LocalPlayer
+    if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local hrp = player.Character.HumanoidRootPart
+        local offset = CFrame.new(0, targetPart.Size.Y/2 + 2, 0)
+        hrp.CFrame = targetPart.CFrame * offset
+        print(`Teleported to above {targetPart.Name}`)
+    else
+        print("Player or character not found")
+    end
+end
+
+local function startAutoSkill()
+    if autoSkillConnection then
+        print("Auto-Skill already running")
+        return
+    end
+    
+    isAutoSkillEnabled = true
+    autoSkillConnection = RunService.RenderStepped:Connect(function()
+        local targetPart = getTargetPart()
+        if not targetPart then
+            print("Auto-Skill: Part not found, stopping auto-skill")
+            stopAutoSkill()
+            return
+        end
+        
+        local player = Players.LocalPlayer
+        if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = player.Character.HumanoidRootPart
+            local offset = CFrame.new(0, targetPart.Size.Y/2 + 2, 0)
+            hrp.CFrame = targetPart.CFrame * offset -- ตำแหน่งตามเป้าหมาย
+            
+            -- เรียกใช้ Auto Attack (สมมติว่าเชื่อมโยงกับ HZWeapon)
+            local ReplicatedFirst = game:GetService("ReplicatedFirst")
+            local HZWeapon = ReplicatedFirst.GameCore:WaitForChild("HZWeapon", 10)
+            if HZWeapon then
+                local weaponHandlerFunc = require(HZWeapon)
+                local weaponHandler = weaponHandlerFunc.new(player, "Bat", {
+                    functions = {},
+                    combatProperties = {animations = {toolslash = "ChefAttack1"}, abilityData = "YourAbilityData"}
+                }, workspace.CallSeo594.Bat)
+                if weaponHandler and weaponHandler:activate({
+                    localPlayer = player,
+                    localCharacter = player.Character,
+                    charRootPart = hrp
+                }) then
+                    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+                    local ReplicaSetValues = ReplicatedStorage:WaitForChild("ReplicaSetValues", 10)
+                    if ReplicaSetValues then
+                        ReplicaSetValues:FireServer({
+                            targetId = targetPart.Name,
+                            damage = 10,
+                            time = workspace:GetServerTimeNow()
+                        })
+                    end
+                end
+            end
+        end
+    end)
+    
+    print("Started auto-skill on Part")
+end
+
+local function stopAutoSkill()
+    if autoSkillConnection then
+        autoSkillConnection:Disconnect()
+        autoSkillConnection = nil
+    end
+    isAutoSkillEnabled = false
+    print("Stopped auto-skill")
+end
+
+local function startFollowingPart()
+    stopFollowing()
+    local targetPart = getTargetPart()
+    if not targetPart then
+        print("Part not found")
+        return
+    end
+    
+    currentFollowedPart = targetPart
+    
+    followConnection = RunService.RenderStepped:Connect(function()
+        local tp = getTargetPart()
+        local player = Players.LocalPlayer
+        if not tp or not player or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+        local hrp = player.Character.HumanoidRootPart
+        local offset = CFrame.new(0, tp.Size.Y/2 + 2, 0)
+        hrp.CFrame = tp.CFrame * offset
+    end)
+    
+    print(`Started following Part`)
+end
+
+local function checkPartExists()
+    local targetPart = getTargetPart()
+    if targetPart then
+        print("workspace.Camera.Part exists!")
+        initializeTargets()
+        print(`There are {#targetParts} additional indexed parts available.`)
+    else
+        print("workspace.Camera.Part does not exist.")
+    end
+end
+
+-- Check if followed part still exists
 RunService.Stepped:Connect(function()
     if not currentFollowedPart then return end
     
-    -- Check if part still exists in the scene
     if not currentFollowedPart:IsDescendantOf(workspace) then
         print(`Part "{currentFollowedPart.Name}" disappeared! Stopping follow.`)
         stopFollowing()
         
-        -- Try to follow next available part
         if #targetParts > 1 then
-            table.remove(targetParts, 1) -- Remove the lost part
-            startFollowing() -- Start following the new first part
+            table.remove(targetParts, 1)
+            startFollowing()
         else
             print("No more parts to follow")
         end
     end
 end)
 
--- Initialize and start
+-- Initialize and execute
 initializeTargets()
-startFollowing()
+teleportToPart()  -- Perform initial TP
+startAutoSkill()  -- Start auto-skill loop after initial TP
 
 -- Example usage:
--- stopFollowing() -- Stop following
--- initializeTargets() -- Re-initialize targets
--- startFollowing() -- Start following again
+-- teleportToPart()
+-- startAutoSkill()
+-- stopAutoSkill()
+-- startFollowingPart()
+-- checkPartExists()
